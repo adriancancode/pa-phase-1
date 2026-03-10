@@ -7,9 +7,9 @@ Protocol:
   - All commands are sent as UTF-8 text lines (ending with \n)
   - Command format:  CMD [arg]
   - For 'put': client sends "put <filename>\n", then 8-byte size, then raw bytes
-  - For 'get': server sends 8-byte size, then raw bytes (or "ERR\n" if not found)
-  - For 'ls':  server sends file list as text, terminated by "END\n"
-  - For 'quit': server closes the connection cleanly
+  - For 'get': server responds OK\n + 8-byte size + raw bytes, or ERR message\n
+  - For 'ls':  server sends filenames one per line, terminated by "END\n"
+  - For 'quit': server responds BYE\n and closes the connection
 """
 
 import socket
@@ -17,7 +17,24 @@ import os
 import sys
 import threading
 
+# Directory the server is allowed to serve files from (set at startup)
+BASE_DIR = None
+
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+def safe_path(filename):
+    """
+    Resolve filename relative to BASE_DIR and confirm it stays inside it.
+    Returns the safe absolute path, or None if the path escapes BASE_DIR.
+    Prevents attacks like:  get ../../etc/passwd
+    """
+    # Strip any directory components the client may have sent
+    filename = os.path.basename(filename)
+    full_path = os.path.realpath(os.path.join(BASE_DIR, filename))
+    if not full_path.startswith(BASE_DIR + os.sep) and full_path != BASE_DIR:
+        return None
+    return full_path
+
 
 def recv_exact(conn, n):
     """Read exactly n bytes from socket, blocking until all arrive."""
@@ -94,11 +111,15 @@ def handle_client(conn, addr):
                 filename = arg.strip()
                 if not filename:
                     conn.sendall(b"ERR No filename specified\n")
-                elif not os.path.isfile(filename):
-                    conn.sendall(f"ERR File '{filename}' not found\n".encode())
                 else:
-                    conn.sendall(b"OK\n")
-                    send_file(conn, filename)
+                    filepath = safe_path(filename)
+                    if filepath is None:
+                        conn.sendall(b"ERR Access denied\n")
+                    elif not os.path.isfile(filepath):
+                        conn.sendall(f"ERR File '{filename}' not found\n".encode())
+                    else:
+                        conn.sendall(b"OK\n")
+                        send_file(conn, filepath)
 
             # ── put ─────────────────────────────────────────────────────────
             elif cmd == "put":
@@ -106,9 +127,13 @@ def handle_client(conn, addr):
                 if not filename:
                     conn.sendall(b"ERR No filename specified\n")
                 else:
-                    conn.sendall(b"OK\n")
-                    recv_file(conn, filename)
-                    conn.sendall(b"DONE\n")
+                    filepath = safe_path(filename)
+                    if filepath is None:
+                        conn.sendall(b"ERR Access denied\n")
+                    else:
+                        conn.sendall(b"OK\n")
+                        recv_file(conn, filepath)
+                        conn.sendall(b"DONE\n")
 
             # ── quit ─────────────────────────────────────────────────────────
             elif cmd == "quit":
@@ -143,6 +168,10 @@ def main():
         print("[!] PORT_NUMBER must be an integer between 1024 and 65535")
         sys.exit(1)
 
+    # Set the base directory (where server files live) — used for path safety checks
+    global BASE_DIR
+    BASE_DIR = os.path.realpath(".")
+
     # Create TCP socket
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
@@ -152,9 +181,19 @@ def main():
     server_sock.bind(("", port))
     server_sock.listen(5)
 
-    print(f"[*] FTP Server listening on port {port}")
-    print(f"[*] Serving files from: {os.path.abspath('.')}")
-    print("[*] Waiting for connections... (Ctrl+C to stop)\n")
+    hostname = socket.gethostname()
+    local_ip = socket.gethostbyname(hostname)
+
+    print("=" * 50)
+    print("         Simple FTP Server — Phase 1")
+    print("=" * 50)
+    print(f"  Host:      {hostname}")
+    print(f"  IP:        {local_ip}")
+    print(f"  Port:      {port}")
+    print(f"  Directory: {BASE_DIR}")
+    print("=" * 50)
+    print("  Waiting for connections... (Ctrl+C to stop)")
+    print("=" * 50 + "\n")
 
     try:
         while True:
