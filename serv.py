@@ -59,20 +59,25 @@ def send_file(conn, filepath):
             conn.sendall(chunk)
     print(f"  [→] Sent '{filepath}' ({filesize} bytes)")
 
-
 def recv_file(conn, filename):
     """Receive a file: read 8-byte size header, then save raw bytes."""
     size_data = recv_exact(conn, 8)
     filesize = int.from_bytes(size_data, "little")
     print(f"  [←] Receiving '{filename}' ({filesize} bytes) ...")
     received = 0
-    with open(filename, "wb") as f:
-        while received < filesize:
-            chunk = conn.recv(min(4096, filesize - received))
-            if not chunk:
-                raise ConnectionError("Client disconnected during upload")
-            f.write(chunk)
-            received += len(chunk)
+    try:
+        with open(filename, "wb") as f:
+            while received < filesize:
+                chunk = conn.recv(min(4096, filesize - received))
+                if not chunk:
+                    raise ConnectionError("Client disconnected during upload")
+                f.write(chunk)
+                received += len(chunk)
+    except OSError as e:
+        if e.errno == 28:  # errno 28 = No space left on device
+            print(f"  [!] Disk full — could not save file")
+        else:
+            print(f"  [!] File write error: {e}")
     print(f"  [✓] Saved '{filename}'")
 
 # ── per-client handler ────────────────────────────────────────────────────────
