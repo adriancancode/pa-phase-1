@@ -62,13 +62,19 @@ def recv_file(sock, filename):
     filesize = int.from_bytes(size_data, "little")
     print(f"  [←] Downloading '{filename}' ({filesize} bytes) ...")
     received = 0
-    with open(filename, "wb") as f:
-        while received < filesize:
-            chunk = sock.recv(min(4096, filesize - received))
-            if not chunk:
-                raise ConnectionError("Server disconnected during download")
-            f.write(chunk)
-            received += len(chunk)
+    try:
+        with open(filename, "wb") as f:
+            while received < filesize:
+                chunk = sock.recv(min(4096, filesize - received))
+                if not chunk:
+                    raise ConnectionError("Server disconnected during download")
+                f.write(chunk)
+                received += len(chunk)
+    except OSError as e:
+        if e.errno == 28:  # errno 28 = No space left on device
+            print(f"  [!] Disk full — could not save file")
+        else:
+            print(f"  [!] File write error: {e}")
     print(f"  [✓] Saved '{filename}'")
 
 
@@ -152,6 +158,9 @@ def main():
     except ValueError:
         print("[!] Port must be an integer")
         sys.exit(1)
+    if  not (1024 <= server_port <= 65535):
+            print("[!] Port must be between 1 and 65535")
+            sys.exit(1)
 
     # Resolve hostname → IP (DNS lookup)
     try:
@@ -164,6 +173,7 @@ def main():
     # Create TCP socket and connect
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
+        sock.settimeout(30)
         sock.connect((server_ip, server_port))
         print(f"[*] Connected to {server_host}:{server_port}")
     except ConnectionRefusedError:
@@ -218,6 +228,9 @@ def main():
             do_quit(sock, buffer)
         except Exception:
             pass
+    except socket.timeout:
+        print("[!] Connection timed out the server is not responding")
+        sys.exit(1)
     finally:
         sock.close()
         print("[*] Disconnected.")
